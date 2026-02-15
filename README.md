@@ -1,3 +1,30 @@
+# Tiny11 Builder (2025 Update)
+
+## Latest Changes (09-07-25)
+The scripts have been significantly updated to provide a smoother and more robust experience.
+
+### Key Updates:
+- **Embedded OSCdimg:** The `tiny11maker.ps1` script now contains `oscdimg.exe` embedded as a Base64 string. This eliminates the dependency on the Windows ADK or external downloads for the main script. `tiny11Coremaker.ps1` downloads it on demand.
+- **Native PowerShell:** Transitioned to using native PowerShell cmdlets for many operations (like Appx removal and Registry modifications) for better performance and error handling.
+- **Comprehensive Debloating:** Updated lists for removing Bloatware, Optional Features (like Recall), and Capabilities.
+- **Privacy & Telemetry:** Enhanced registry tweaks to disable Telemetry, Windows Consumer Features, and other tracking mechanisms.
+- **System Requirements Bypass:** Built-in bypass for TPM, Secure Boot, and RAM checks.
+- **OOBE Bypass:** Automated `autounattend.xml` integration to skip Microsoft Account creation.
+
+### Script Versions:
+- **`tiny11maker.ps1`**: The recommended script for most users. Creates a serviceable, lightweight Windows 11 image.
+- **`tiny11Coremaker.ps1`**: For advanced users/developers needing an extremely stripped-down environment (non-serviceable).
+
+### Quick Usage:
+1. Mount your Windows 11 ISO.
+2. Run `Set-ExecutionPolicy Bypass -Scope Process` in PowerShell (Admin).
+3. Run `.\tiny11maker.ps1`.
+4. Follow prompts.
+
+---
+*(Original README content preserved below)*
+---
+
 # tiny11builder
 *Scripts to build a trimmed-down Windows 11 image - now in **PowerShell**!*
 
