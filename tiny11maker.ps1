@@ -230,14 +230,28 @@ $packagePrefixes = 'AppUp.IntelManagementandSecurityStatus',
 'ByteDance.TikTok'
 
 Write-Output "Removing Provisioned Appx Packages..."
+$RegexPattern = '^(' + ($packagePrefixes -join '|') + ')'
 Get-AppxProvisionedPackage -Path "$ScratchDisk\scratchdir" |
-    Where-Object { $pkg = $_; $packagePrefixes | Where-Object { $pkg.DisplayName -match $_ } } |
+    Where-Object { $_.DisplayName -match $RegexPattern } |
     Remove-AppxProvisionedPackage -Path "$ScratchDisk\scratchdir"
 
 Write-Output "Removing Optional Features..."
 Disable-WindowsOptionalFeature -Image "$ScratchDisk\scratchdir" -FeatureName "Recall" -Remove -ErrorAction SilentlyContinue
 Disable-WindowsOptionalFeature -Image "$ScratchDisk\scratchdir" -FeatureName "MediaPlayback" -Remove -ErrorAction SilentlyContinue
 Disable-WindowsOptionalFeature -Image "$ScratchDisk\scratchdir" -FeatureName "WorkFolders-Client" -Remove -ErrorAction SilentlyContinue
+Disable-WindowsOptionalFeature -Image "$ScratchDisk\scratchdir" -FeatureName "MicrosoftWindowsPowerShellV2Root" -Remove -ErrorAction SilentlyContinue
+Disable-WindowsOptionalFeature -Image "$ScratchDisk\scratchdir" -FeatureName "MicrosoftWindowsPowerShellV2" -Remove -ErrorAction SilentlyContinue
+Disable-WindowsOptionalFeature -Image "$ScratchDisk\scratchdir" -FeatureName "Internet-Explorer-Optional-amd64" -Remove -ErrorAction SilentlyContinue
+
+Write-Output "Removing Capabilities (Features on Demand)..."
+$Capabilities = @(
+    "App.StepsRecorder~~~~0.0.1.0",
+    "App.Support.QuickAssist~~~~0.0.1.0",
+    "MathRecognizer~~~~0.0.1.0"
+)
+foreach ($cap in $Capabilities) {
+    Remove-WindowsCapability -Path "$ScratchDisk\scratchdir" -Name $cap -ErrorAction SilentlyContinue
+}
 
 Write-Output "Removing Edge:"
 Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force | Out-Null
@@ -331,8 +345,17 @@ $RegistryTweaks = @(
     @{Path="HKLM:\zSYSTEM\ControlSet001\Control\WMI\Autologger\AutoLogger-Diagtrack-Listener"; Name="Start"; Value=0; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI"; Name="DisableAIDataAnalysis"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\System"; Name="PublishUserActivities"; Value=0; Type="DWord"},
-    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\PowerShell"; Name="EnableScripts"; Value=0; Type="DWord"},
-    @{Path="HKLM:\zSYSTEM\ControlSet001\Services\WinHttpAutoProxySvc"; Name="Start"; Value=4; Type="DWord"}
+    @{Path="HKLM:\zSYSTEM\ControlSet001\Services\WinHttpAutoProxySvc"; Name="Start"; Value=4; Type="DWord"},
+    # Windows Error Reporting (Disable memory dumps to Microsoft)
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting"; Name="Disabled"; Value=1; Type="DWord"},
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting"; Name="DontSendAdditionalData"; Value=1; Type="DWord"},
+    # Defender Cloud/Spynet Telemetry (Keep local protection, kill cloud submission)
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows Defender\Spynet"; Name="SpynetReporting"; Value=0; Type="DWord"},
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows Defender\Spynet"; Name="SubmitSamplesConsent"; Value=2; Type="DWord"},
+    # Search & Cortana Extirpation
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="AllowCortana"; Value=0; Type="DWord"},
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="DisableWebSearch"; Value=1; Type="DWord"},
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="ConnectedSearchUseWeb"; Value=0; Type="DWord"}
 )
 
 foreach ($tweak in $RegistryTweaks) {
@@ -374,6 +397,14 @@ Remove-Item -Path "$tasksPath\Microsoft\Windows\Flighting\OneSettings\RefreshCac
 
 # Edge remnant update tasks
 Remove-Item -Path "$tasksPath\Microsoft\Windows\UpdateOrchestrator\UpdateModelTask" -Force -ErrorAction SilentlyContinue
+
+# Xbox Live Save / Sync tasks
+Remove-Item -Path "$tasksPath\Microsoft\XblGameSave" -Recurse -Force -ErrorAction SilentlyContinue
+
+# Edge orphaned tasks
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Management\Provisioning\Logon" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$tasksPath\Microsoft\Windows\SettingSync\BackgroundUploadTask" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$tasksPath\Microsoft\Windows\SettingSync\NetworkStateChangeTask" -Force -ErrorAction SilentlyContinue
 Write-Host "Task files have been deleted."
 Write-Host "Unmounting Registry..."
 reg unload HKLM\zCOMPONENTS | Out-Null
@@ -418,7 +449,8 @@ $SetupRegistryTweaks = @(
     @{Path="HKLM:\zSYSTEM\Setup\LabConfig"; Name="BypassSecureBootCheck"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSYSTEM\Setup\LabConfig"; Name="BypassStorageCheck"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSYSTEM\Setup\LabConfig"; Name="BypassTPMCheck"; Value=1; Type="DWord"},
-    @{Path="HKLM:\zSYSTEM\Setup\MoSetup"; Name="AllowUpgradesWithUnsupportedTPMOrCPU"; Value=1; Type="DWord"}
+    @{Path="HKLM:\zSYSTEM\Setup\MoSetup"; Name="AllowUpgradesWithUnsupportedTPMOrCPU"; Value=1; Type="DWord"},
+    @{Path="HKLM:\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"; Name="BypassNRO"; Value=1; Type="DWord"}
 )
 
 foreach ($tweak in $SetupRegistryTweaks) {
