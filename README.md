@@ -9,7 +9,7 @@ The scripts have been significantly updated to provide a smoother and more robus
 - **Comprehensive Debloating:** Updated lists for removing Bloatware, Optional Features (like Recall), and Capabilities.
 - **Privacy & Telemetry:** Enhanced registry tweaks to disable Telemetry, Windows Consumer Features, and other tracking mechanisms.
 - **System Requirements Bypass:** Built-in bypass for TPM, Secure Boot, and RAM checks.
-- **OOBE Bypass:** Automated `autounattend.xml` integration to skip Microsoft Account creation.
+- **Zero-Touch OOBE:** Automated `autounattend.xml` integration to skip Microsoft Account creation, EULA, and privacy screens.
 
 ### Script Versions:
 - **`tiny11maker.ps1`**: The recommended script for most users. Creates a serviceable, lightweight Windows 11 image.
