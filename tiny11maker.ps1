@@ -275,6 +275,18 @@ reg load HKLM\zSOFTWARE $ScratchDisk\scratchdir\Windows\System32\config\SOFTWARE
 reg load HKLM\zSYSTEM $ScratchDisk\scratchdir\Windows\System32\config\SYSTEM | Out-Null
 Write-Output "Applying Registry Tweaks..."
 $RegistryTweaks = @(
+    # Explorer & Shell UX Overrides
+    @{Path="HKLM:\zNTUSER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"; Name=""; Value=""; Type="String"},
+    @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="HideFileExt"; Value=0; Type="DWord"},
+    @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="Hidden"; Value=1; Type="DWord"},
+    @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="UseCompactMode"; Value=1; Type="DWord"},
+    # Annoyance & Interrupt Eradication
+    @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\UserProfileEngagement"; Name="ScoobeSystemSettingEnabled"; Value=0; Type="DWord"},
+    @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SubscribedContent-310093Enabled"; Value=0; Type="DWord"},
+    @{Path="HKLM:\zNTUSER\Control Panel\Accessibility\StickyKeys"; Name="Flags"; Value="506"; Type="String"},
+    # Visual & Performance QoL
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Explorer"; Name="DisableSearchBoxSuggestions"; Value=1; Type="DWord"},
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\System"; Name="DisableAcrylicBackgroundOnLogon"; Value=1; Type="DWord"},
     @{Path="HKLM:\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache"; Name="SV1"; Value=0; Type="DWord"},
     @{Path="HKLM:\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache"; Name="SV2"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache"; Name="SV1"; Value=0; Type="DWord"},
@@ -295,7 +307,6 @@ $RegistryTweaks = @(
     @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="PreInstalledAppsEverEnabled"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SoftLandingEnabled"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SubscribedContentEnabled"; Value=0; Type="DWord"},
-    @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SubscribedContent-310093Enabled"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SubscribedContent-338388Enabled"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SubscribedContent-338389Enabled"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SubscribedContent-338393Enabled"; Value=0; Type="DWord"},
@@ -333,7 +344,6 @@ $RegistryTweaks = @(
     @{Path="HKLM:\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate"; Delete=$true},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"; Name="TurnOffWindowsCopilot"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Edge"; Name="HubsSidebarEnabled"; Value=0; Type="DWord"},
-    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Explorer"; Name="DisableSearchBoxSuggestions"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Teams"; Name="DisableInstallation"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail"; Name="PreventRun"; Value=1; Type="DWord"},
     # Security Hardening
@@ -417,6 +427,10 @@ dism.exe /Image:$ScratchDisk\scratchdir /Cleanup-Image /StartComponentCleanup /R
 Write-Output "Cleanup complete."
 Write-Output ' '
 Write-Output "Unmounting image..."
+Write-Output "Forcing handle release and garbage collection..."
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+Start-Sleep -Seconds 3
 Dismount-WindowsImage -Path $ScratchDisk\scratchdir -Save
 Write-Host "Exporting image..."
 Dism.exe /Export-Image /SourceImageFile:"$ScratchDisk\tiny11\sources\install.wim" /SourceIndex:$index /DestinationImageFile:"$ScratchDisk\tiny11\sources\install2.wim" /Compress:recovery
@@ -3017,7 +3031,16 @@ AAAAAAA="
     $OSCDIMG = $localOSCDIMGPath
 }
 
-& "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" "$PSScriptRoot\tiny11.iso"
+$EtfsBoot = Join-Path $ScratchDisk "tiny11\boot\etfsboot.com"
+$EfiSys   = Join-Path $ScratchDisk "tiny11\efi\microsoft\boot\efisys.bin"
+
+if (-not (Test-Path $EtfsBoot) -or -not (Test-Path $EfiSys)) {
+    Write-Error "CRITICAL: Boot binaries missing. OS image structure is invalid."
+    exit 1
+}
+
+$BootData = "-bootdata:2#p0,e,b$EtfsBoot#pEF,e,b$EfiSys"
+& "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' $BootData "$ScratchDisk\tiny11" "$PSScriptRoot\tiny11.iso"
 
 # Finishing up
 Write-Output "Creation completed! Press any key to exit the script..."
