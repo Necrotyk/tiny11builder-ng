@@ -84,7 +84,7 @@ C:/path/to/your/tiny11/script.ps1 -ISO <letter> -SCRATCH <letter>
           <li>Clipchamp</li>
           <li>News</li>
           <li>Weather</li>
-          <li>Xbox</li>
+          <li>Xbox (and related Gaming Services)</li>
           <li>GetHelp</li>
           <li>GetStarted</li>
           <li>Office Hub</li>
@@ -97,13 +97,34 @@ C:/path/to/your/tiny11/script.ps1 -ISO <letter> -SCRATCH <letter>
           <li>Feedback Hub</li>
           <li>Maps</li>
           <li>Sound Recorder</li>
-          <li>Your Phone</li>
-          <li>Media Player</li>
+          <li>Your Phone (Phone Link)</li>
+          <li>Media Player (Legacy)</li>
           <li>QuickAssist</li>
           <li>Internet Explorer</li>
           <li>Tablet PC Math</li>
           <li>Edge</li>
           <li>OneDrive</li>
+          <li><b>New in this release:</b></li>
+          <li>Copilot</li>
+          <li>Outlook (New)</li>
+          <li>Dev Home</li>
+          <li>Teams</li>
+          <li>Terminal</li>
+          <li>Paint</li>
+          <li>Camera</li>
+          <li>Sticky Notes</li>
+          <li>Mixed Reality Portal</li>
+          <li>3D Viewer</li>
+          <li>OneNote</li>
+          <li>Skype</li>
+          <li>Wallet</li>
+          <li>Family</li>
+          <li>Spotify</li>
+          <li>TikTok</li>
+          <li>Luminar Neo</li>
+          <li>Recall</li>
+          <li>Steps Recorder</li>
+          <li>Math Recognizer</li>
         </ul>
       </td>
       <td>
@@ -113,6 +134,9 @@ C:/path/to/your/tiny11/script.ps1 -ISO <letter> -SCRATCH <letter>
           <li>Windows Defender (only disabled, can be enabled back if needed)</li>
           <li>Windows Update (wouldn't work without WinSxS, enabling it would put the system in a state of failure)</li>
           <li>WinRE</li>
+          <li>WordPad</li>
+          <li>Wallpaper Content Extended</li>
+          <li>Speech, Handwriting, OCR, TextToSpeech Capabilities</li>
         </ul>
       </td>
     </tr>
