@@ -1,13 +1,14 @@
 # Tiny11 Builder NG
 
 <p align="center">
-  <b>Hardened Dual-Platform (Windows & Linux) Debloating & ISO-Mastering Pipeline for Windows 11 (24H2 / 25H2)</b>
+  <b>Hardened Dual-Platform (Windows & Linux) Debloating & ISO-Mastering Pipeline for Windows 11 (24H2 / 25H2 / 23H2)</b>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-GPL%203.0%2B-blue.svg" alt="License: GPL-3.0-or-later">
-  <img src="https://img.shields.io/badge/Windows%2011-24H2%20%7C%2025H2-0078D6.svg?logo=windows" alt="Windows 11">
+  <img src="https://img.shields.io/badge/Windows%2011-24H2%20%7C%2025H2%20%7C%2023H2-0078D6.svg?logo=windows" alt="Windows 11">
   <img src="https://img.shields.io/badge/Architecture-x64%20(AMD64)%20%7C%20ARM64-orange.svg" alt="Architecture: x64 / ARM64">
+  <img src="https://img.shields.io/badge/Boot%20Modes-Legacy%20BIOS%20(MBR)%20%7C%20UEFI%20(GPT)-purple.svg" alt="Boot Modes">
   <img src="https://img.shields.io/badge/Linux%20Toolchain-100%25%20Rootless-success.svg?logo=linux" alt="Linux Rootless">
   <img src="https://img.shields.io/badge/ShellCheck-Passed-brightgreen.svg" alt="ShellCheck Passed">
 </p>
@@ -22,6 +23,8 @@ It features **two independent, fully featured platform engines**:
 1. **Windows Native (`tiny11maker.ps1`):** Completely refactored PowerShell engine utilizing native DISM cmdlets, `.NET` garbage collection, retry-backed registry unloading, and embedded `oscdimg`.
 2. **Linux Native (`tiny11_linux.sh`):** A **100% rootless**, zero-mount POSIX Bash pipeline utilizing `wimlib-imagex`, `hivexregedit`, and `xorriso` to manipulate WIM images and registry hives offline with zero kernel/FUSE mounts.
 
+Both engines produce **Hybrid Dual-Boot ISOs** compatible with **Legacy BIOS (MBR)** systems (e.g. Panasonic Toughbook CF-19 / CF-31, older ThinkPads) and modern **UEFI (GPT)** systems.
+
 ---
 
 ## ⚡ Platform Engines Comparison
@@ -34,17 +37,24 @@ It features **two independent, fully featured platform engines**:
 | **ISO Mastering** | Embedded `oscdimg.exe` (ADK fallback) | `xorriso` (Hybrid UEFI/BIOS El Torito) |
 | **Execution Privilege** | Elevated Administrator | **100% Unprivileged / Rootless** |
 | **Target Architectures** | `amd64` (x64) and `arm64` | `amd64` (x64) and `arm64` |
+| **Custom Driver Staging** | Yes (`-Drivers <path>`) | Yes (`-d, --drivers <path>`) |
 | **Handling DISM Error 32** | GC Handle Reclamation + Retry Backoff | N/A (Zero-mount design eliminates locks) |
 
 ---
 
-## ⚠️ Windows 11 24H2/25H2 Hardware Notice
+## ⚠️ Hardware & CPU Compatibility Guide (POPCNT Check)
 
-> [!WARNING]
-> **Mandatory CPU Instruction Requirements (SSE4.2 & POPCNT):**
-> Starting in Windows 11 24H2, the Windows NT kernel (`ntoskrnl.exe`) strictly requires **`SSE4.2`** and **`POPCNT`** instructions.
->
-> While `LabConfig` registry bypasses (`BypassTPMCheck`, `BypassCPUCheck`, `BypassRAMCheck`, `BypassSecureBootCheck`, `BypassStorageCheck`, `BypassNRO`) bypass setup gates on unsupported generation processors (e.g., Intel 7th Gen, AMD 1st Gen Zen), CPUs lacking hardware `POPCNT` instructions (such as Core 2 Duo / Core 2 Quad) will trigger a kernel bugcheck (`BlockedExecutionDueToPOPCNTMissing`) and **cannot** boot Windows 11 24H2+.
+Starting in Windows 11 **24H2**, the Windows NT kernel strictly enforces **`SSE4.2`** and **`POPCNT`** instructions. The script automatically senses the build version of your source ISO:
+
+| Target Hardware | CPU Instruction Level | Windows 11 24H2 / 25H2 (Build 26100+) | Windows 11 23H2 (Build 22631) |
+|---|---|---|---|
+| **Modern UEFI PCs** (Intel 8th Gen+ / Ryzen 2000+) | SSE4.2 + POPCNT + AVX2 | ✅ **Supported natively** | ✅ **Supported** |
+| **Older Core i-Series** (e.g. Toughbook CF-19 mk4–mk8 / ThinkPad X220/T430) | SSE4.2 + POPCNT (1st–7th Gen) | ✅ **Supported via LabConfig bypass** | ✅ **Supported** |
+| **Legacy Core 2 Duo / Quad** (e.g. Toughbook CF-19 mk1–mk3 / ThinkPad X200/T61) | Lacks POPCNT | ❌ **Kernel Bugcheck (POPCNT Missing)** | ✅ **Fully Supported via LabConfig bypass** |
+
+> [!TIP]
+> * **For Core i3/i5/i7 laptops (including Toughbook CF-19 mk4 through mk8):** Use Windows 11 24H2 or 25H2 ISOs.
+> * **For Core 2 Duo laptops (including Toughbook CF-19 mk1 through mk3):** Use a Windows 11 23H2 (Build 22631) ISO to bypass the POPCNT CPU requirement.
 
 ---
 
@@ -91,8 +101,12 @@ apk add wimlib xorriso 7zip
   -x 1 \
   -y
 
-# Maximum Solid Compression (LZMS)
-./tiny11_linux.sh -i Win11_24H2.iso -o tiny11_small.iso -x 1 --solid -y
+# Staging Custom Hardware Drivers (e.g. Panasonic Touchscreen / Wi-Fi)
+./tiny11_linux.sh \
+  -i Win11_24H2_x64.iso \
+  -d /path/to/cf19_drivers \
+  -o tiny11_cf19.iso \
+  -x 1 -y
 ```
 
 ### CLI Reference (`tiny11_linux.sh`)
@@ -103,6 +117,8 @@ Options:
   -o, --output PATH         Path for destination ISO (default: ./tiny11_YYYYMMDD.iso)
   -s, --scratch DIR         Custom scratch directory (default: current directory or /tmp)
   -x, --index NUMBER        Windows edition index to extract (e.g. 1, 2, 6)
+  -d, --drivers DIR         Directory of custom .inf/.sys drivers to inject
+                            (e.g. Panasonic Touchscreen, Wi-Fi, Intel HD Graphics)
   -y, --yes, --non-interactive
                             Run non-interactively without confirmation prompts
       --solid               Use recovery/LZMS solid compression (smaller ISO, slower export)
@@ -132,16 +148,12 @@ Set-ExecutionPolicy Bypass -Scope Process
 # Headless / Parametric Mode
 .\tiny11maker.ps1 -ISO E -SCRATCH D -Index 1
 
+# Injecting Custom Hardware Drivers
+.\tiny11maker.ps1 -ISO E -SCRATCH D -Drivers "C:\Drivers\CF19" -Index 1
+
 # Maximum Solid Compression (LZMS)
 .\tiny11maker.ps1 -ISO E -SCRATCH D -Index 1 -Solid
 ```
-
-### Key Windows Invariants Fixed in NG:
-- **DISM Parameter Binding Fix:** Replaced invalid `-Image` with `-Path "$ScratchDisk\scratchdir_install"` across all optional features and capability removals.
-- **Nameless Registry Key Fix:** Properly sets default registry values (`Set-Item -Path $tweak.Path -Value $tweak.Value -Force`) preventing `ParameterArgumentValidationErrorEmptyStringNotAllowed` crashes.
-- **Garbage Collection & Retry Hive Unloading:** Implemented `.NET` garbage collection (`[System.GC]::Collect()`) and a 3-tier retry backoff for `reg.exe unload` preventing `DISM Error 32` file locks.
-- **Isolated Mount Directories:** Separated `$ScratchDisk\scratchdir_install` and `$ScratchDisk\scratchdir_boot` mount points.
-- **Intelligent Scratch Auto-Discovery:** Automatically scans fixed drives for $\ge 25\text{ GB}$ capacity and prompts user when default volume lacks space.
 
 ---
 
@@ -168,17 +180,26 @@ Set-ExecutionPolicy Bypass -Scope Process
 * **OOBE Offline Account:** `BypassNRO=1` (enables local account setup without internet)
 * **BitLocker Auto-Encryption Block:** `PreventDeviceEncryption=1` (prevents surprise drive locking during clean installs)
 * **Recall & AI Telemetry:** `TurnOffRecall=1`, `DisableAIDataAnalysis=1`, `TurnOffWindowsCopilot=1`
+* **Low-Resource & Battery Footprint:** Reduced hibernation file footprint (`powercfg /h /type reduced`, saving 2–4 GB on small SSDs), balanced power plan, compact Explorer view.
 * **Telemetry & Spynet:** `AllowTelemetry=0`, `SpynetReporting=0`, `SubmitSamplesConsent=2`
 * **Classic Context Menus:** Native classic Windows 10 style right-click context menus enabled out-of-the-box.
 
 ---
 
-## 💾 Creating Installation Media
+## 💾 Creating Installation Media (BIOS MBR vs UEFI GPT)
 
-### Writing to USB Flash Drive
+### 1. For Legacy BIOS / Non-UEFI Laptops (e.g. Toughbook CF-19 / CF-31, ThinkPads)
+* **Rufus (Windows):**
+  * **Partition scheme:** `MBR`
+  * **Target system:** `BIOS (or UEFI-CSM)`
+  * **File system:** `NTFS`
+* **Ventoy (Windows / Linux):**
+  * Install Ventoy to USB using `Partition Style: MBR`. Copy the ISO directly to the USB.
 
-* **Rufus (Windows):** Select your generated `.iso`, choose Partition scheme **GPT**, Target system **UEFI (non-CSM)**.
-* **Ventoy (Windows / Linux):** Copy the generated `.iso` directly to your Ventoy USB drive.
+### 2. For Modern UEFI Systems
+* **Rufus (Windows):**
+  * **Partition scheme:** `GPT`
+  * **Target system:** `UEFI (non-CSM)`
 * **dd / Etcher (Linux):**
   ```bash
   sudo dd if=tiny11_custom.iso of=/dev/sdX bs=4M status=progress conv=fsync

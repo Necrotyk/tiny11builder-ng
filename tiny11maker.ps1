@@ -1,17 +1,18 @@
 <#
 .SYNOPSIS
-    Builds a streamlined, debloated, and hardened Windows 11 (24H2/25H2) installation ISO.
+    Builds a streamlined, debloated, and hardened Windows 11 (24H2/25H2/23H2) installation ISO.
 
 .DESCRIPTION
     Automates the creation of a lightweight Windows 11 image.
-    Hardened for Windows 11 24H2/25H2 builds with:
+    Hardened for modern 24H2/25H2 and legacy 23H2 builds with:
     - DISM cmdlet parameter correction (-Path instead of -Image)
     - Registry default key (nameless) injection handling without validation errors
     - Robust handle garbage collection and retry-backed hive unmounting
     - Isolated mount directories (scratchdir_install & scratchdir_boot) to prevent DISM Error 32
     - Pre-flight 25 GB disk space verification and intelligent drive auto-discovery
+    - Custom driver staging and automated installation (-Drivers)
     - 24H2 AppX package modernization and Recall / Copilot deactivation
-    - Complete LabConfig hardware requirement bypasses
+    - Complete LabConfig hardware requirement bypasses for Legacy BIOS (MBR) and UEFI
 
 .PARAMETER ISO
     Drive letter where the source Windows 11 ISO is mounted (e.g. E or E:).
@@ -22,6 +23,10 @@
 .PARAMETER Index
     Image index of the Windows edition to process.
 
+.PARAMETER Drivers
+    Path to directory containing custom hardware drivers (.inf/.sys) to inject
+    (e.g. Panasonic Touchscreen, Wi-Fi, Intel HD Graphics).
+
 .PARAMETER Solid
     Use LZMS/recovery solid compression for the exported install.wim (smaller ISO, longer export).
 
@@ -30,7 +35,7 @@
 
 .EXAMPLE
     .\tiny11maker.ps1 -ISO E -SCRATCH D
-    .\tiny11maker.ps1 -ISO E -SCRATCH D -Index 1 -Solid
+    .\tiny11maker.ps1 -ISO E -SCRATCH D -Drivers "C:\Drivers\CF19" -Index 1 -Solid
     .\tiny11maker.ps1
 #>
 
@@ -43,6 +48,9 @@ param (
 
     [Parameter(Position = 2)]
     [int]$Index,
+
+    [Parameter(Position = 3)]
+    [string]$Drivers,
 
     [switch]$Solid,
     [switch]$Unattended
@@ -80,6 +88,7 @@ function Assert-AdminAndPolicy {
         if ($ISO) { $argsList += " -ISO `"$ISO`"" }
         if ($SCRATCH) { $argsList += " -SCRATCH `"$SCRATCH`"" }
         if ($Index) { $argsList += " -Index $Index" }
+        if ($Drivers) { $argsList += " -Drivers `"$Drivers`"" }
         if ($Solid) { $argsList += " -Solid" }
         if ($Unattended) { $argsList += " -Unattended" }
 
@@ -213,7 +222,6 @@ function Set-RegistryTweakSafe {
         }
 
         if ([string]::IsNullOrEmpty($Tweak.Name)) {
-            # Set default key value on the container itself
             Set-Item -Path $Tweak.Path -Value $Tweak.Value -Force
             Write-Output "Set default registry value: $($Tweak.Path)"
         } else {
@@ -232,7 +240,6 @@ function Disable-OptionalFeatureSafe {
         [Parameter(Mandatory=$true)][string]$FeatureName
     )
     try {
-        # Use -Path (NOT -Image) to correctly bind in DISM PowerShell module
         Disable-WindowsOptionalFeature -Path $MountPath -FeatureName $FeatureName -Remove -NoRestart -ErrorAction Stop | Out-Null
         Write-Output "Removed optional feature: $FeatureName"
     } catch {
@@ -293,17 +300,13 @@ Assert-AdminAndPolicy
 $logPath = Join-Path $PSScriptRoot "tiny11_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 Start-Transcript -Path $logPath -ErrorAction SilentlyContinue
 
-$Host.UI.RawUI.WindowTitle = "Tiny11 Builder NG (24H2/25H2)"
+$Host.UI.RawUI.WindowTitle = "Tiny11 Builder NG (24H2/25H2/23H2)"
 Clear-Host
 
 Write-Output "================================================================="
-Write-Output "  Tiny11 Builder NG — Windows 11 24H2/25H2 Hardened Pipeline    "
+Write-Output "  Tiny11 Builder NG — Hardened Windows 11 Image Mastering        "
+Write-Output "  Legacy BIOS (MBR) & Modern UEFI (GPT) Dual-Boot Support        "
 Write-Output "================================================================="
-Write-Output "NOTE: Starting in Windows 11 24H2, the Windows NT kernel strictly"
-Write-Output "requires CPU instructions SSE4.2 and POPCNT. Registry bypasses"
-Write-Output "permit installation on unsupported generation CPUs, but CPUs"
-Write-Output "lacking hardware POPCNT cannot boot 24H2+ kernels."
-Write-Output "=================================================================`n"
 
 $hostArchitecture = $Env:PROCESSOR_ARCHITECTURE
 $ScratchDisk = Get-ValidScratchDisk -PreferredScratch $SCRATCH -RequiredFreeGB 25
@@ -411,6 +414,24 @@ if (-not $Index -or $validIndices -notcontains $Index) {
 
 Write-Output "Selected Edition Index: $Index"
 
+# Inspect Build Number
+$targetBuild = 0
+$wimDetails = & dism.exe /English /Get-WimInfo "/WimFile:$wimFile" "/Index:$Index"
+if ($wimDetails -match 'Version : \d+\.\d+\.(\d+)') {
+    $targetBuild = [int]$Matches[1]
+}
+
+Write-Output "`n================================================================="
+Write-Output "  Source Windows 11 Build: $targetBuild"
+if ($targetBuild -ge 26100) {
+    Write-Warning "Windows 11 24H2/25H2 Detected: Kernel strictly requires SSE4.2 + POPCNT."
+    Write-Warning "Supported on Core i3/i5/i7 (1st Gen+) / CF-19 mk4 to mk8."
+    Write-Warning "Core 2 Duo / CF-19 mk1-mk3 requires Windows 11 23H2 (Build 22631)."
+} else {
+    Write-Output "Windows 11 23H2/22H2 Detected: Fully compatible with Legacy BIOS & older Core 2 Duo hardware (CF-19 mk1-mk8)."
+}
+Write-Output "=================================================================`n"
+
 #=============================================================================
 # Mounting & Customizing install.wim
 #=============================================================================
@@ -427,8 +448,7 @@ if ($imageIntl -match 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})') 
 Write-Output "Detected UI Language: $languageCode"
 
 $targetArch = "amd64"
-$wimInfoText = & dism.exe /English /Get-WimInfo "/WimFile:$wimFile" "/Index:$Index"
-if ($wimInfoText -match 'Architecture : (\w+)') {
+if ($wimDetails -match 'Architecture : (\w+)') {
     $rawArch = $Matches[1].ToLower()
     if ($rawArch -eq 'x64' -or $rawArch -eq 'amd64') {
         $targetArch = 'amd64'
@@ -551,6 +571,22 @@ Write-Output "Removing OneDrive Setup..."
 & icacls.exe "$installMountDir\Windows\System32\OneDriveSetup.exe" /grant "*S-1-5-32-544:(F)" 2>&1 | Out-Null
 Remove-Item -Path "$installMountDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
 
+# Custom Drivers Injection & Staging
+if ($Drivers -and (Test-Path $Drivers)) {
+    Write-Output "`nInjecting and Staging Custom Hardware Drivers from: $Drivers"
+    try {
+        Add-WindowsDriver -Path $installMountDir -Driver $Drivers -Recurse -ErrorAction SilentlyContinue | Out-Null
+        Write-Output "DISM driver injection completed."
+    } catch {
+        Write-Warning "Add-WindowsDriver encountered warning: $($_.Exception.Message)"
+    }
+
+    $stagedDriversDir = "$installMountDir\Windows\Setup\Drivers"
+    New-Item -ItemType Directory -Force -Path $stagedDriversDir | Out-Null
+    Copy-Item -Path "$Drivers\*" -Destination $stagedDriversDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Output "Drivers staged into C:\Windows\Setup\Drivers"
+}
+
 #=============================================================================
 # Registry Injections & Hardening (install.wim)
 #=============================================================================
@@ -560,11 +596,12 @@ Mount-RegistryHives -MountPath $installMountDir
 $RegistryTweaks = @(
     # Classic Context Menu (nameless default value on InprocServer32)
     @{Path="HKLM:\zNTUSER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"; Name=""; Value=""; Type="String"},
-    # Explorer Optimizations
+    # Explorer & Small Screen Optimizations
     @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="HideFileExt"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="Hidden"; Value=1; Type="DWord"},
     @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="UseCompactMode"; Value=1; Type="DWord"},
     @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="TaskbarMn"; Value=0; Type="DWord"},
+    @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="ShowSecondsInSystemClock"; Value=0; Type="DWord"},
     # OOBE & Account Bypass
     @{Path="HKLM:\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE"; Name="BypassNRO"; Value=1; Type="DWord"},
     # BitLocker Auto-Encryption Block
@@ -600,10 +637,11 @@ $RegistryTweaks = @(
     @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SilentInstalledAppsEnabled"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SubscribedContent-310093Enabled"; Value=0; Type="DWord"},
     @{Path="HKLM:\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name="SystemPaneSuggestionsEnabled"; Value=0; Type="DWord"},
-    # Search Web Integration
+    # Search Web Integration & Indexing for Older HDDs/SSDs
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="AllowCortana"; Value=0; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="DisableWebSearch"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="ConnectedSearchUseWeb"; Value=0; Type="DWord"},
+    @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="PreventIndexingLowDiskSpaceMB"; Value=1024; Type="DWord"},
     # Security Baseline (LSA Protection & VBS)
     @{Path="HKLM:\zSYSTEM\ControlSet001\Control\Lsa"; Name="RunAsPPL"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSYSTEM\ControlSet001\Control\DeviceGuard"; Name="EnableVirtualizationBasedSecurity"; Value=1; Type="DWord"}
@@ -613,6 +651,29 @@ Write-Output "`nApplying Registry Tweaks..."
 foreach ($tweak in $RegistryTweaks) {
     Set-RegistryTweakSafe -Tweak $tweak
 }
+
+# Inject SetupComplete.cmd
+$setupScriptsDir = "$installMountDir\Windows\Setup\Scripts"
+New-Item -ItemType Directory -Force -Path $setupScriptsDir | Out-Null
+$setupCompleteContent = @'
+@echo off
+:: Tiny11 First-Boot Automation Script
+echo [Tiny11] Performing first-boot cleanup and driver configuration...
+
+:: 1. Cleanly unregister removed AppX manifests for all users
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-AppxPackage -AllUsers | Where-Object { $_.Name -match '^(Microsoft\.Copilot|Microsoft\.Windows\.DevHome|Microsoft\.OutlookForWindows|Microsoft\.BingNews|Microsoft\.BingSearch|Microsoft\.BingWeather|Microsoft\.549981C3F5F10|Microsoft\.Todos|Microsoft\.YourPhone|Microsoft\.ZuneVideo|Microsoft\.ZuneMusic|Microsoft\.WindowsFeedbackHub|Microsoft\.GetHelp|Microsoft\.Getstarted|Microsoft\.Windows\.CrossDevice|MicrosoftWindows\.Client\.WebExperience|MSTeams|MicrosoftTeams|Microsoft\.GamingApp|Microsoft\.Xbox.*|Microsoft\.PowerAutomateDesktop|Clipchamp\.Clipchamp|ByteDance\.TikTok|SpotifyAB\.SpotifyMusic)' } | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue" >nul 2>&1
+
+:: 2. Low-Resource & Battery Optimizations (Reduce Hibernation file size by 50%)
+powercfg.exe /hibernate /type reduced >nul 2>&1
+powercfg.exe /setactive SCHEME_BALANCED >nul 2>&1
+
+:: 3. Offline Staged Driver Installation
+if exist "C:\Windows\Setup\Drivers" (
+    echo [Tiny11] Installing staged hardware drivers...
+    pnputil.exe /add-driver "C:\Windows\Setup\Drivers\*.inf" /subdirs /install >nul 2>&1
+)
+'@
+Set-Content -Path "$setupScriptsDir\SetupComplete.cmd" -Value $setupCompleteContent -Encoding ASCII
 
 # Inject autounattend.xml into Sysprep
 $sysprepDir = "$installMountDir\Windows\System32\Sysprep"
@@ -3263,6 +3324,14 @@ if (Test-Path $isoOutPath) {
     Write-Output "`n================================================================="
     Write-Output "  Tiny11 ISO Created Successfully: $isoOutPath ($isoSizeGB GB)"
     Write-Output "================================================================="
+    Write-Output ""
+    Write-Output "── USB Burning Guide ───────────────────────────────────────────"
+    Write-Output "  • Legacy BIOS / Non-UEFI Target (Toughbook CF-19, CF-31, ThinkPad):"
+    Write-Output "    - Rufus: Partition Scheme: MBR | Target: BIOS (or UEFI-CSM) | FS: NTFS"
+    Write-Output "    - Ventoy: Standard MBR installation"
+    Write-Output "  • Modern UEFI Target:"
+    Write-Output "    - Rufus: Partition Scheme: GPT | Target: UEFI (non-CSM)"
+    Write-Output "────────────────────────────────────────────────────────────────`n"
 } else {
     Write-Error "ISO creation failed."
 }

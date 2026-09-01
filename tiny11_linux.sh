@@ -24,6 +24,7 @@ SRC_ISO=""
 OUTPUT_ISO=""
 CUSTOM_SCRATCH=""
 EDITION_INDEX=""
+DRIVERS_DIR=""
 NON_INTERACTIVE=false
 SOLID_COMPRESSION=false
 AUTO_INSTALL_DEPS=false
@@ -31,6 +32,8 @@ CHECK_DEPS_ONLY=false
 
 TMP_WORK_DIR=""
 CLEAN_EXIT=false
+DETECTED_BUILD=0
+DETECTED_ARCH="amd64"
 
 #=============================================================================
 # UI & Output Helpers
@@ -58,11 +61,7 @@ print_banner() {
   Tiny11 Builder NG (Linux Native Toolchain) — 24H2/25H2 Ready   
 =================================================================
   Offline WIM/Registry Manipulation | Zero FUSE/Kernel Mounts    
-=================================================================
-NOTE: Starting in Windows 11 24H2, the Windows NT kernel strictly
-requires CPU instructions SSE4.2 and POPCNT. Registry bypasses
-permit installation on unsupported generation CPUs, but CPUs
-lacking hardware POPCNT cannot boot 24H2+ kernels.
+  Legacy BIOS (MBR) & Modern UEFI (GPT) Dual-Boot Support       
 =================================================================
 EOF
     echo ""
@@ -77,6 +76,8 @@ Options:
   -o, --output PATH         Path for output ISO (default: ./tiny11_custom.iso)
   -s, --scratch DIR         Custom scratch directory (default: system tmp / cwd)
   -x, --index NUMBER        Image edition index to extract (e.g. 1, 2, 6)
+  -d, --drivers DIR         Directory of custom .inf/.sys drivers to inject
+                            (e.g. Panasonic Touchscreen, Wi-Fi, Intel HD Graphics)
   -y, --yes, --non-interactive
                             Run non-interactively, accepting defaults
       --solid               Use recovery/LZMS solid compression (smaller, slower)
@@ -86,7 +87,7 @@ Options:
 
 Examples:
   $SCRIPT_NAME -i Win11_24H2_English_x64.iso -o tiny11_24H2.iso
-  $SCRIPT_NAME -i Win11_24H2_x64.iso -o tiny11.iso -x 1 --solid -y
+  $SCRIPT_NAME -i Win11_24H2_x64.iso -d ./cf19_drivers -o tiny11_cf19.iso -x 1 -y
   $SCRIPT_NAME --check-deps
 
 EOF
@@ -242,7 +243,6 @@ setup_scratch_space() {
     if [ -n "$CUSTOM_SCRATCH" ]; then
         target_base="$CUSTOM_SCRATCH"
     else
-        # Prefer current working directory if it has sufficient space, else fallback to /tmp or /var/tmp
         target_base="$PWD"
     fi
 
@@ -253,7 +253,6 @@ setup_scratch_space() {
     if [ "$free_gb" -lt "$REQUIRED_FREE_GB" ]; then
         log_warn "Selected scratch path '$target_base' has only ${free_gb} GB free ($REQUIRED_FREE_GB GB required)."
         
-        # Scan other available mount points
         log_info "Scanning available filesystems with >= $REQUIRED_FREE_GB GB free..."
         local candidates=()
         while read -r line; do
@@ -317,7 +316,7 @@ extract_source_iso() {
 }
 
 #=============================================================================
-# WIM Edition Selection & Export
+# WIM Edition Selection, Export & Build Sensing
 #=============================================================================
 
 process_wim_image() {
@@ -366,16 +365,43 @@ process_wim_image() {
     rm -f "$iso_dir/sources/install.esd" "$iso_dir/sources/install.wim"
     mv "$dest_wim" "$iso_dir/sources/install.wim"
 
-    # Determine Architecture
-    local arch_raw
-    arch_raw="$(wimlib-imagex info "$iso_dir/sources/install.wim" 1 | grep -i '<ARCH>' | head -n1 | sed -e 's/[<>/]//g' -e 's/ARCH//g' | tr -d '[:space:]' || echo "PROCESSOR_ARCHITECTURE_AMD64")"
+    # Determine Architecture & Build Version
+    local wim_xml
+    wim_xml="$(wimlib-imagex info "$iso_dir/sources/install.wim" 1 --xml || true)"
     
+    local arch_raw
+    arch_raw="$(echo "$wim_xml" | grep -i '<ARCH>' | head -n1 | sed -e 's/[<>/]//g' -e 's/ARCH//g' | tr -d '[:space:]' || echo "PROCESSOR_ARCHITECTURE_AMD64")"
     if echo "$arch_raw" | grep -qi "ARM64"; then
         DETECTED_ARCH="arm64"
     else
         DETECTED_ARCH="amd64"
     fi
-    log_ok "Detected Image Architecture: $DETECTED_ARCH"
+
+    local build_raw
+    build_raw="$(echo "$wim_xml" | grep -i '<BUILD>' | head -n1 | sed -e 's/[^0-9]//g' || echo 0)"
+    if [ -n "$build_raw" ] && [ "$build_raw" -gt 0 ]; then
+        DETECTED_BUILD="$build_raw"
+    fi
+
+    log_ok "Detected Architecture: $DETECTED_ARCH | Windows Build: $DETECTED_BUILD"
+
+    # Hardware Compatibility Advisory
+    echo ""
+    if [ "$DETECTED_BUILD" -ge 26100 ]; then
+        log_warn "================================================================="
+        log_warn "  Windows 11 24H2/25H2 Detected (Build $DETECTED_BUILD)           "
+        log_warn "  HARDWARE NOTICE: Kernel strictly requires SSE4.2 + POPCNT.     "
+        log_warn "  - Supported: Intel Core i3/i5/i7 (1st Gen+) / CF-19 mk4 to mk8 "
+        log_warn "  - Unsupported: Core 2 Duo / Quad / CF-19 mk1 to mk3            "
+        log_warn "================================================================="
+    else
+        log_ok "================================================================="
+        log_ok "  Windows 11 23H2 / 22H2 Detected (Build $DETECTED_BUILD)        "
+        log_ok "  HARDWARE NOTICE: Fully compatible with Legacy BIOS, non-UEFI,  "
+        log_ok "  and older Core 2 Duo / Core Duo hardware (CF-19 mk1 to mk8).  "
+        log_ok "================================================================="
+    fi
+    echo ""
 }
 
 #=============================================================================
@@ -386,7 +412,6 @@ debloat_install_wim() {
     local install_wim="$TMP_WORK_DIR/iso_files/sources/install.wim"
     log_info "Pruning provisioned AppX bloatware and telemetry components..."
 
-    # Build wimlib update script
     local update_cmds="$TMP_WORK_DIR/wim_update_cmds.txt"
     cat << 'EOF' > "$update_cmds"
 delete --force --recursive '/Program Files (x86)/Microsoft/Edge'
@@ -403,7 +428,6 @@ delete --force --recursive '/Windows/System32/Tasks/Microsoft/Windows/UpdateOrch
 delete --force --recursive '/Windows/System32/Tasks/Microsoft/XblGameSave'
 EOF
 
-    # AppX packages prefixes to prune
     local appx_prefixes=(
         "Clipchamp.Clipchamp"
         "Microsoft.BingNews"
@@ -460,7 +484,6 @@ EOF
         "ByteDance.TikTok"
     )
 
-    # Inspect Program Files/WindowsApps inside WIM and add matching deletions
     local wim_apps_list="$TMP_WORK_DIR/wim_apps.txt"
     wimlib-imagex dir "$install_wim" 1 --path="/Program Files/WindowsApps" 2>/dev/null > "$wim_apps_list" || true
 
@@ -474,7 +497,6 @@ EOF
         done
     fi
 
-    # Execute wimlib update
     wimlib-imagex update "$install_wim" 1 < "$update_cmds" >/dev/null 2>&1 || true
     log_ok "WIM directory pruning completed."
 }
@@ -499,9 +521,9 @@ apply_registry_tweaks() {
     local def_hive="$hives_dir/default"
     local ntu_hive="$hives_dir/ntuser.dat"
 
-    log_info "Injecting Windows 11 24H2/25H2 registry bypasses & optimizations..."
+    log_info "Injecting Windows 11 registry bypasses, BitLocker blocks & optimizations..."
 
-    # SYSTEM Hive Tweaks (LabConfig, BitLocker, Telemetry Services, LSA)
+    # SYSTEM Hive Tweaks
     local sys_reg="$TMP_WORK_DIR/system_tweaks.reg"
     cat << 'EOF' > "$sys_reg"
 Windows Registry Editor Version 5.00
@@ -534,7 +556,7 @@ EOF
 
     hivexregedit --merge --prefix 'HKEY_LOCAL_MACHINE\SYSTEM' "$sys_hive" "$sys_reg"
 
-    # SOFTWARE Hive Tweaks (OOBE BypassNRO, Telemetry, Recall, Copilot, CloudContent)
+    # SOFTWARE Hive Tweaks
     local soft_reg="$TMP_WORK_DIR/software_tweaks.reg"
     cat << 'EOF' > "$soft_reg"
 Windows Registry Editor Version 5.00
@@ -565,6 +587,7 @@ Windows Registry Editor Version 5.00
 "AllowCortana"=dword:00000000
 "DisableWebSearch"=dword:00000001
 "ConnectedSearchUseWeb"=dword:00000000
+"PreventIndexingLowDiskSpaceMB"=dword:00000400
 EOF
 
     hivexregedit --merge --prefix 'HKEY_LOCAL_MACHINE\SOFTWARE' "$soft_hive" "$soft_reg"
@@ -581,7 +604,7 @@ EOF
 
     hivexregedit --merge --prefix 'HKEY_USERS\.DEFAULT' "$def_hive" "$def_reg"
 
-    # NTUSER Hive Tweaks (Classic Context Menu, Explorer, ContentDeliveryManager)
+    # NTUSER Hive Tweaks (Classic Context Menu, Compact Explorer, Left Taskbar)
     local ntu_reg="$TMP_WORK_DIR/ntuser_tweaks.reg"
     cat << 'EOF' > "$ntu_reg"
 Windows Registry Editor Version 5.00
@@ -594,6 +617,7 @@ Windows Registry Editor Version 5.00
 "Hidden"=dword:00000001
 "UseCompactMode"=dword:00000001
 "TaskbarMn"=dword:00000000
+"ShowSecondsInSystemClock"=dword:00000000
 
 [HKEY_CURRENT_USER\Control Panel\UnsupportedHardwareNotificationCache]
 "SV1"=dword:00000000
@@ -609,7 +633,6 @@ EOF
 
     hivexregedit --merge --prefix 'HKEY_CURRENT_USER' "$ntu_hive" "$ntu_reg"
 
-    # Re-inject modified registry hives into install.wim
     log_info "Writing modified registry hives back into install.wim..."
     local readd_cmds="$TMP_WORK_DIR/readd_hives.txt"
     cat << EOF > "$readd_cmds"
@@ -624,21 +647,35 @@ EOF
 }
 
 #=============================================================================
-# SetupComplete.cmd & Unattended Injections
+# SetupComplete.cmd, Drivers & Unattended Injections
 #=============================================================================
 
 inject_setup_scripts_and_unattend() {
     local install_wim="$TMP_WORK_DIR/iso_files/sources/install.wim"
     local iso_dir="$TMP_WORK_DIR/iso_files"
 
-    log_info "Injecting first-boot AppX manifest unregister script (SetupComplete.cmd)..."
+    log_info "Injecting first-boot optimization script (SetupComplete.cmd)..."
     local scripts_dir="$TMP_WORK_DIR/scripts"
     mkdir -p "$scripts_dir"
     local setup_complete="$scripts_dir/SetupComplete.cmd"
 
     cat << 'EOF' > "$setup_complete"
 @echo off
+:: Tiny11 First-Boot Automation Script
+echo [Tiny11] Performing first-boot cleanup and driver configuration...
+
+:: 1. Cleanly unregister removed AppX manifests for all users
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-AppxPackage -AllUsers | Where-Object { $_.Name -match '^(Microsoft\.Copilot|Microsoft\.Windows\.DevHome|Microsoft\.OutlookForWindows|Microsoft\.BingNews|Microsoft\.BingSearch|Microsoft\.BingWeather|Microsoft\.549981C3F5F10|Microsoft\.Todos|Microsoft\.YourPhone|Microsoft\.ZuneVideo|Microsoft\.ZuneMusic|Microsoft\.WindowsFeedbackHub|Microsoft\.GetHelp|Microsoft\.Getstarted|Microsoft\.Windows\.CrossDevice|MicrosoftWindows\.Client\.WebExperience|MSTeams|MicrosoftTeams|Microsoft\.GamingApp|Microsoft\.Xbox.*|Microsoft\.PowerAutomateDesktop|Clipchamp\.Clipchamp|ByteDance\.TikTok|SpotifyAB\.SpotifyMusic)' } | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue" >nul 2>&1
+
+:: 2. Low-Resource & Battery Optimizations (Reduce Hibernation file size by 50%)
+powercfg.exe /hibernate /type reduced >nul 2>&1
+powercfg.exe /setactive SCHEME_BALANCED >nul 2>&1
+
+:: 3. Offline Staged Driver Installation (e.g. Panasonic Touchscreen, Wi-Fi, Intel HD)
+if exist "C:\Windows\Setup\Drivers" (
+    echo [Tiny11] Installing staged hardware drivers...
+    pnputil.exe /add-driver "C:\Windows\Setup\Drivers\*.inf" /subdirs /install >nul 2>&1
+)
 EOF
 
     # Dynamic autounattend.xml generation
@@ -685,17 +722,23 @@ EOF
 </unattend>
 EOF
 
-    # Inject into install.wim
+    # Stage custom hardware drivers if provided
     local inject_cmds="$TMP_WORK_DIR/inject_cmds.txt"
     cat << EOF > "$inject_cmds"
 add --force '$setup_complete' '/Windows/Setup/Scripts/SetupComplete.cmd'
 add --force '$autounattend_file' '/Windows/System32/Sysprep/autounattend.xml'
 EOF
+
+    if [ -n "$DRIVERS_DIR" ] && [ -d "$DRIVERS_DIR" ]; then
+        log_info "Staging custom hardware drivers from: $DRIVERS_DIR"
+        echo "add --force '$DRIVERS_DIR' '/Windows/Setup/Drivers'" >> "$inject_cmds"
+    fi
+
     wimlib-imagex update "$install_wim" 1 < "$inject_cmds" >/dev/null
 
     # Copy to ISO root
     cp "$autounattend_file" "$iso_dir/autounattend.xml"
-    log_ok "Setup scripts and unattended answer file injected."
+    log_ok "Setup scripts, unattended answer file, and driver stages injected."
 }
 
 #=============================================================================
@@ -786,6 +829,15 @@ master_final_iso() {
         log_ok "  Tiny11 ISO Created Successfully: $out_iso ($size_gb)"
         log_ok "  SHA256: $sha_hash"
         log_ok "================================================================="
+        echo ""
+        printf "\033[1;36m%s\033[0m\n" "── USB Burning Guide ───────────────────────────────────────────────"
+        printf "  \033[1m• Legacy BIOS / Non-UEFI Target (e.g. Toughbook CF-19, CF-31, ThinkPad):\033[0m\n"
+        printf "    - Rufus: Partition Scheme: \033[1;32mMBR\033[0m | Target: \033[1;32mBIOS (or UEFI-CSM)\033[0m | FS: NTFS\n"
+        printf "    - Ventoy: Standard MBR installation\n"
+        printf "  \033[1m• Modern UEFI Target:\033[0m\n"
+        printf "    - Rufus: Partition Scheme: \033[1;32mGPT\033[0m | Target: \033[1;32mUEFI (non-CSM)\033[0m\n"
+        printf "    - dd: sudo dd if=\"%s\" of=/dev/sdX bs=4M status=progress conv=fsync\n" "$out_iso"
+        printf "\033[1;36m%s\033[0m\n\n" "────────────────────────────────────────────────────────────────────"
     else
         log_error "ISO generation failed."
         exit 1
@@ -816,6 +868,10 @@ main() {
                 ;;
             -x|--index)
                 EDITION_INDEX="${2:-}"
+                shift 2
+                ;;
+            -d|--drivers)
+                DRIVERS_DIR="${2:-}"
                 shift 2
                 ;;
             -y|--yes|--non-interactive)
