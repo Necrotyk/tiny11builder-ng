@@ -37,6 +37,8 @@ Both engines produce **Hybrid Dual-Boot ISOs** compatible with **Legacy BIOS (MB
 | **ISO Mastering** | Embedded `oscdimg.exe` (ADK fallback) | `xorriso` (Hybrid UEFI/BIOS El Torito) |
 | **Execution Privilege** | Elevated Administrator | **100% Unprivileged / Rootless** |
 | **Target Architectures** | `amd64` (x64) and `arm64` | `amd64` (x64) and `arm64` |
+| **FAT32 Split WIM (`.swm`)** | Yes (`-Split`) | Yes (`--split`) |
+| **Low-Spec UI Profile** | Yes (`-LowSpec`) | Yes (`--low-spec`) |
 | **Custom Driver Staging** | Yes (`-Drivers <path>`) | Yes (`-d, --drivers <path>`) |
 | **Handling DISM Error 32** | GC Handle Reclamation + Retry Backoff | N/A (Zero-mount design eliminates locks) |
 
@@ -101,11 +103,13 @@ apk add wimlib xorriso 7zip
   -x 1 \
   -y
 
-# Staging Custom Hardware Drivers (e.g. Panasonic Touchscreen / Wi-Fi)
+# Maximum Legacy / Low-Spec Build with Staged Drivers and FAT32 Splitting
 ./tiny11_linux.sh \
   -i Win11_24H2_x64.iso \
-  -d /path/to/cf19_drivers \
+  -d ./cf19_drivers \
   -o tiny11_cf19.iso \
+  --low-spec \
+  --split \
   -x 1 -y
 ```
 
@@ -119,6 +123,10 @@ Options:
   -x, --index NUMBER        Windows edition index to extract (e.g. 1, 2, 6)
   -d, --drivers DIR         Directory of custom .inf/.sys drivers to inject
                             (e.g. Panasonic Touchscreen, Wi-Fi, Intel HD Graphics)
+      --split               Split install.wim into <= 3800 MB .swm files
+                            (enables direct copy-paste on standard FAT32 USB drives)
+      --low-spec            Apply aggressive low-resource UI optimizations
+                            (disables DWM transparency, blur, and window animations)
   -y, --yes, --non-interactive
                             Run non-interactively without confirmation prompts
       --solid               Use recovery/LZMS solid compression (smaller ISO, slower export)
@@ -148,8 +156,8 @@ Set-ExecutionPolicy Bypass -Scope Process
 # Headless / Parametric Mode
 .\tiny11maker.ps1 -ISO E -SCRATCH D -Index 1
 
-# Injecting Custom Hardware Drivers
-.\tiny11maker.ps1 -ISO E -SCRATCH D -Drivers "C:\Drivers\CF19" -Index 1
+# Low-Spec Laptop Profile with Staged Drivers and FAT32 Splitting
+.\tiny11maker.ps1 -ISO E -SCRATCH D -Drivers "C:\Drivers\CF19" -LowSpec -Split -Index 1
 
 # Maximum Solid Compression (LZMS)
 .\tiny11maker.ps1 -ISO E -SCRATCH D -Index 1 -Solid
@@ -179,8 +187,10 @@ Set-ExecutionPolicy Bypass -Scope Process
 * **`LabConfig` Setup Bypasses:** `BypassTPMCheck=1`, `BypassSecureBootCheck=1`, `BypassRAMCheck=1`, `BypassCPUCheck=1`, `BypassStorageCheck=1`
 * **OOBE Offline Account:** `BypassNRO=1` (enables local account setup without internet)
 * **BitLocker Auto-Encryption Block:** `PreventDeviceEncryption=1` (prevents surprise drive locking during clean installs)
+* **VBS Disabled by Default:** `EnableVirtualizationBasedSecurity=0` (eliminates 15–30% CPU penalty on pre-8th Gen processors lacking hardware MBEC)
 * **Recall & AI Telemetry:** `TurnOffRecall=1`, `DisableAIDataAnalysis=1`, `TurnOffWindowsCopilot=1`
 * **Low-Resource & Battery Footprint:** Reduced hibernation file footprint (`powercfg /h /type reduced`, saving 2–4 GB on small SSDs), balanced power plan, compact Explorer view.
+* **Low-Spec UI Profile (`--low-spec` / `-LowSpec`):** Disables DWM transparency, blur, and window animations (`MinAnimate=0`, `VisualFXSetting=2`) for maximum responsiveness on older Intel HD/GMA graphics.
 * **Telemetry & Spynet:** `AllowTelemetry=0`, `SpynetReporting=0`, `SubmitSamplesConsent=2`
 * **Classic Context Menus:** Native classic Windows 10 style right-click context menus enabled out-of-the-box.
 
@@ -197,6 +207,9 @@ Set-ExecutionPolicy Bypass -Scope Process
   * Install Ventoy to USB using `Partition Style: MBR`. Copy the ISO directly to the USB.
 
 ### 2. For Modern UEFI Systems
+* **Direct FAT32 (When built with `--split` / `-Split`):**
+  * Format USB flash drive as standard **FAT32**.
+  * Copy and paste the contents of the ISO directly onto the USB flash drive.
 * **Rufus (Windows):**
   * **Partition scheme:** `GPT`
   * **Target system:** `UEFI (non-CSM)`

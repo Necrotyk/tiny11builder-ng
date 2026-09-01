@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# tiny11_linux.sh — Native POSIX/Linux Windows 11 (24H2/25H2) Debloating & ISO Mastering Engine
+# tiny11_linux.sh — Native POSIX/Linux Windows 11 (24H2/25H2/23H2) Debloating & ISO Mastering Engine
 #
 # Direct offline WIM manipulation and registry injection with zero filesystem mounting.
 # Dependencies: wimlib-imagex, hivexregedit, xorriso, 7z (or bsdtar)
@@ -27,6 +27,8 @@ EDITION_INDEX=""
 DRIVERS_DIR=""
 NON_INTERACTIVE=false
 SOLID_COMPRESSION=false
+SPLIT_WIM=false
+LOW_SPEC_MODE=false
 AUTO_INSTALL_DEPS=false
 CHECK_DEPS_ONLY=false
 
@@ -78,6 +80,10 @@ Options:
   -x, --index NUMBER        Image edition index to extract (e.g. 1, 2, 6)
   -d, --drivers DIR         Directory of custom .inf/.sys drivers to inject
                             (e.g. Panasonic Touchscreen, Wi-Fi, Intel HD Graphics)
+      --split               Split install.wim into <= 3800 MB .swm files
+                            (enables direct copy-paste on standard FAT32 USB drives)
+      --low-spec            Apply aggressive low-resource UI optimizations
+                            (disables DWM transparency, blur, and window animations)
   -y, --yes, --non-interactive
                             Run non-interactively, accepting defaults
       --solid               Use recovery/LZMS solid compression (smaller, slower)
@@ -87,7 +93,7 @@ Options:
 
 Examples:
   $SCRIPT_NAME -i Win11_24H2_English_x64.iso -o tiny11_24H2.iso
-  $SCRIPT_NAME -i Win11_24H2_x64.iso -d ./cf19_drivers -o tiny11_cf19.iso -x 1 -y
+  $SCRIPT_NAME -i Win11_24H2_x64.iso -d ./cf19_drivers --low-spec --split -y
   $SCRIPT_NAME --check-deps
 
 EOF
@@ -523,7 +529,7 @@ apply_registry_tweaks() {
 
     log_info "Injecting Windows 11 registry bypasses, BitLocker blocks & optimizations..."
 
-    # SYSTEM Hive Tweaks
+    # SYSTEM Hive Tweaks (VBS disabled by default to eliminate CPU bottleneck on older hardware)
     local sys_reg="$TMP_WORK_DIR/system_tweaks.reg"
     cat << 'EOF' > "$sys_reg"
 Windows Registry Editor Version 5.00
@@ -545,7 +551,7 @@ Windows Registry Editor Version 5.00
 "RunAsPPL"=dword:00000001
 
 [HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Control\DeviceGuard]
-"EnableVirtualizationBasedSecurity"=dword:00000001
+"EnableVirtualizationBasedSecurity"=dword:00000000
 
 [HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\dmwappushservice]
 "Start"=dword:00000004
@@ -590,6 +596,15 @@ Windows Registry Editor Version 5.00
 "PreventIndexingLowDiskSpaceMB"=dword:00000400
 EOF
 
+    if [ "$LOW_SPEC_MODE" = true ]; then
+        log_info "Injecting aggressive low-spec DWM and animation optimizations..."
+        cat << 'EOF' >> "$soft_reg"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\DWM]
+"DisallowAnimations"=dword:00000001
+EOF
+    fi
+
     hivexregedit --merge --prefix 'HKEY_LOCAL_MACHINE\SOFTWARE' "$soft_hive" "$soft_reg"
 
     # DEFAULT Hive Tweaks
@@ -630,6 +645,20 @@ Windows Registry Editor Version 5.00
 "SubscribedContent-310093Enabled"=dword:00000000
 "SystemPaneSuggestionsEnabled"=dword:00000000
 EOF
+
+    if [ "$LOW_SPEC_MODE" = true ]; then
+        cat << 'EOF' >> "$ntu_reg"
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize]
+"EnableTransparency"=dword:00000000
+
+[HKEY_CURRENT_USER\Control Panel\Desktop\WindowMetrics]
+"MinAnimate"="0"
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects]
+"VisualFXSetting"=dword:00000002
+EOF
+    fi
 
     hivexregedit --merge --prefix 'HKEY_CURRENT_USER' "$ntu_hive" "$ntu_reg"
 
@@ -739,6 +768,14 @@ EOF
     # Copy to ISO root
     cp "$autounattend_file" "$iso_dir/autounattend.xml"
     log_ok "Setup scripts, unattended answer file, and driver stages injected."
+
+    # Split WIM if requested
+    if [ "$SPLIT_WIM" = true ]; then
+        log_info "Splitting install.wim into <= 3800 MB FAT32-compatible .swm files..."
+        wimlib-imagex split "$install_wim" "$iso_dir/sources/install.swm" 3800 --check
+        rm -f "$install_wim"
+        log_ok "WIM successfully split into install.swm chunks."
+    fi
 }
 
 #=============================================================================
@@ -836,6 +873,9 @@ master_final_iso() {
         printf "    - Ventoy: Standard MBR installation\n"
         printf "  \033[1m• Modern UEFI Target:\033[0m\n"
         printf "    - Rufus: Partition Scheme: \033[1;32mGPT\033[0m | Target: \033[1;32mUEFI (non-CSM)\033[0m\n"
+        if [ "$SPLIT_WIM" = true ]; then
+            printf "    - Direct FAT32: Format USB as FAT32, copy-paste ISO contents directly!\n"
+        fi
         printf "    - dd: sudo dd if=\"%s\" of=/dev/sdX bs=4M status=progress conv=fsync\n" "$out_iso"
         printf "\033[1;36m%s\033[0m\n\n" "────────────────────────────────────────────────────────────────────"
     else
@@ -873,6 +913,14 @@ main() {
             -d|--drivers)
                 DRIVERS_DIR="${2:-}"
                 shift 2
+                ;;
+            --split)
+                SPLIT_WIM=true
+                shift
+                ;;
+            --low-spec)
+                LOW_SPEC_MODE=true
+                shift
                 ;;
             -y|--yes|--non-interactive)
                 NON_INTERACTIVE=true

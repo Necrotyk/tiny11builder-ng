@@ -11,6 +11,8 @@
     - Isolated mount directories (scratchdir_install & scratchdir_boot) to prevent DISM Error 32
     - Pre-flight 25 GB disk space verification and intelligent drive auto-discovery
     - Custom driver staging and automated installation (-Drivers)
+    - FAT32 split WIM support (-Split) into <= 3800 MB .swm files
+    - Low-spec / legacy laptop optimizations (-LowSpec)
     - 24H2 AppX package modernization and Recall / Copilot deactivation
     - Complete LabConfig hardware requirement bypasses for Legacy BIOS (MBR) and UEFI
 
@@ -27,6 +29,12 @@
     Path to directory containing custom hardware drivers (.inf/.sys) to inject
     (e.g. Panasonic Touchscreen, Wi-Fi, Intel HD Graphics).
 
+.PARAMETER Split
+    Split install.wim into <= 3800 MB install.swm files for native FAT32 USB compatibility.
+
+.PARAMETER LowSpec
+    Disable DWM transparency, blur, and window animations for older GPUs / laptops.
+
 .PARAMETER Solid
     Use LZMS/recovery solid compression for the exported install.wim (smaller ISO, longer export).
 
@@ -35,7 +43,7 @@
 
 .EXAMPLE
     .\tiny11maker.ps1 -ISO E -SCRATCH D
-    .\tiny11maker.ps1 -ISO E -SCRATCH D -Drivers "C:\Drivers\CF19" -Index 1 -Solid
+    .\tiny11maker.ps1 -ISO E -SCRATCH D -Drivers "C:\Drivers\CF19" -LowSpec -Split -Index 1
     .\tiny11maker.ps1
 #>
 
@@ -52,6 +60,8 @@ param (
     [Parameter(Position = 3)]
     [string]$Drivers,
 
+    [switch]$Split,
+    [switch]$LowSpec,
     [switch]$Solid,
     [switch]$Unattended
 )
@@ -89,6 +99,8 @@ function Assert-AdminAndPolicy {
         if ($SCRATCH) { $argsList += " -SCRATCH `"$SCRATCH`"" }
         if ($Index) { $argsList += " -Index $Index" }
         if ($Drivers) { $argsList += " -Drivers `"$Drivers`"" }
+        if ($Split) { $argsList += " -Split" }
+        if ($LowSpec) { $argsList += " -LowSpec" }
         if ($Solid) { $argsList += " -Solid" }
         if ($Unattended) { $argsList += " -Unattended" }
 
@@ -642,10 +654,20 @@ $RegistryTweaks = @(
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="DisableWebSearch"; Value=1; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="ConnectedSearchUseWeb"; Value=0; Type="DWord"},
     @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\Windows Search"; Name="PreventIndexingLowDiskSpaceMB"; Value=1024; Type="DWord"},
-    # Security Baseline (LSA Protection & VBS)
+    # Security Baseline (LSA Protection & VBS Disabled for older CPU performance)
     @{Path="HKLM:\zSYSTEM\ControlSet001\Control\Lsa"; Name="RunAsPPL"; Value=1; Type="DWord"},
-    @{Path="HKLM:\zSYSTEM\ControlSet001\Control\DeviceGuard"; Name="EnableVirtualizationBasedSecurity"; Value=1; Type="DWord"}
+    @{Path="HKLM:\zSYSTEM\ControlSet001\Control\DeviceGuard"; Name="EnableVirtualizationBasedSecurity"; Value=0; Type="DWord"}
 )
+
+if ($LowSpec) {
+    Write-Output "Injecting aggressive low-spec DWM and animation tweaks..."
+    $RegistryTweaks += @(
+        @{Path="HKLM:\zSOFTWARE\Policies\Microsoft\Windows\DWM"; Name="DisallowAnimations"; Value=1; Type="DWord"},
+        @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"; Name="EnableTransparency"; Value=0; Type="DWord"},
+        @{Path="HKLM:\zNTUSER\Control Panel\Desktop\WindowMetrics"; Name="MinAnimate"; Value="0"; Type="String"},
+        @{Path="HKLM:\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"; Name="VisualFXSetting"; Value=2; Type="DWord"}
+    )
+}
 
 Write-Output "`nApplying Registry Tweaks..."
 foreach ($tweak in $RegistryTweaks) {
@@ -717,6 +739,14 @@ Write-Output "`nExporting and optimizing install.wim (Compression: $exportCompre
 
 Remove-Item -Path $wimFile -Force -ErrorAction SilentlyContinue
 Rename-Item -Path $exportWim -NewName "install.wim" -Force
+
+# Split WIM into .swm files if requested
+if ($Split) {
+    Write-Output "`nSplitting install.wim into <= 3800 MB FAT32-compatible install.swm files..."
+    $splitTarget = "$stagingDir\sources\install.swm"
+    & dism.exe /Split-Image "/ImageFile:$stagingDir\sources\install.wim" "/SWMFile:$splitTarget" /FileSize:3800 /CheckIntegrity
+    Remove-Item -Path "$stagingDir\sources\install.wim" -Force -ErrorAction SilentlyContinue
+}
 
 #=============================================================================
 # Customizing boot.wim (WinPE Windows Setup)
@@ -3331,6 +3361,9 @@ if (Test-Path $isoOutPath) {
     Write-Output "    - Ventoy: Standard MBR installation"
     Write-Output "  • Modern UEFI Target:"
     Write-Output "    - Rufus: Partition Scheme: GPT | Target: UEFI (non-CSM)"
+    if ($Split) {
+        Write-Output "    - Direct FAT32: Format USB as FAT32, copy-paste ISO contents directly!"
+    }
     Write-Output "────────────────────────────────────────────────────────────────`n"
 } else {
     Write-Error "ISO creation failed."
